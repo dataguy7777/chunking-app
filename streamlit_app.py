@@ -3,11 +3,13 @@ import logging
 import streamlit as st
 from typing import List, Tuple
 from langchain.text_splitter import CharacterTextSplitter
-from langchain.embeddings import OpenAIEmbeddings
+from langchain.embeddings.openai import OpenAIEmbeddings  # Corrected import
 from sentence_transformers import SentenceTransformer
 import faiss
 import pickle
 import numpy as np
+import PyPDF2
+import docx
 
 # Configure Logging
 logging.basicConfig(
@@ -20,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 def load_documents(file_path: str) -> List[str]:
     """
-    Load documents from a text file.
+    Load documents from a file (supports .txt, .pdf, .docx).
 
     Args:
         file_path (str): Path to the file.
@@ -33,8 +35,25 @@ def load_documents(file_path: str) -> List[str]:
         ['This is the content of sample.txt']
     """
     try:
-        with open(file_path, 'r', encoding='utf-8') as file:
-            documents = [file.read()]
+        if file_path.endswith('.txt'):
+            with open(file_path, 'r', encoding='utf-8') as file:
+                documents = [file.read()]
+        elif file_path.endswith('.pdf'):
+            with open(file_path, 'rb') as file:
+                reader = PyPDF2.PdfReader(file)
+                text = ""
+                for page in reader.pages:
+                    extracted_text = page.extract_text()
+                    if extracted_text:
+                        text += extracted_text + "\n"
+                documents = [text]
+        elif file_path.endswith('.docx'):
+            doc = docx.Document(file_path)
+            text = "\n".join([para.text for para in doc.paragraphs])
+            documents = [text]
+        else:
+            documents = []
+            logger.warning(f"Unsupported file type: {file_path}")
         logger.info(f"Loaded document from {file_path}")
         return documents
     except Exception as e:
@@ -151,8 +170,8 @@ def create_vector_store(embeddings: List[List[float]], metadata: List[dict], ind
 
         dimension = len(embeddings[0])
         index = faiss.IndexFlatL2(dimension)
-        faiss.normalize_L2(np.array(embeddings).astype('float32'))
-        index.add(np.array(embeddings).astype('float32'))
+        normalized_embeddings = faiss.normalize_L2(np.array(embeddings).astype('float32'))
+        index.add(normalized_embeddings)
         faiss.write_index(index, index_path)
         with open('metadata.pkl', 'wb') as meta_file:
             pickle.dump(metadata, meta_file)
@@ -198,7 +217,7 @@ def process_folder(folder_path: str, embedding_model: str) -> None:
         None
 
     Example:
-        >>> process_folder('./documents', 'openai/text-embedding-ada-002')
+        >>> process_folder('./documents', 'openai:text-embedding-ada-002')
         None
     """
     try:
@@ -241,8 +260,9 @@ def main():
         uploaded_file = st.file_uploader("Choose a file", type=["txt", "pdf", "docx"])
         if uploaded_file is not None:
             # Save the uploaded file to a temporary location
-            file_path = os.path.join("temp", uploaded_file.name)
-            os.makedirs("temp", exist_ok=True)
+            temp_dir = "temp"
+            os.makedirs(temp_dir, exist_ok=True)
+            file_path = os.path.join(temp_dir, uploaded_file.name)
             with open(file_path, "wb") as f:
                 f.write(uploaded_file.getbuffer())
             st.success(f"File {uploaded_file.name} uploaded successfully.")
